@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0002" />
+<title>3D 玫瑰 · 专属展示</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; }
+
+  #phone {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 40%, #2a0008 0%, #0d0002 60%, #000000 100%);
+  }
+
+  @media (min-width: 560px) and (min-height: 640px) {
+    body { display: flex; align-items: center; justify-content: center; background: #050505; }
+    #phone {
+      width: auto;
+      height: min(880px, calc(100dvh - 48px));
+      aspect-ratio: 9 / 16;
+      border-radius: 40px;
+      box-shadow: 0 0 0 11px #0a0a0a, 0 30px 80px -20px rgba(0,0,0,0.9);
+    }
+  }
+
+  #stage { position: absolute; inset: 0; }
+  #stage canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+
+  .hint {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    pointer-events: none;
+    z-index: 10;
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .hint.hide { opacity: 0; transform: translate(-50%, -50%) scale(1.1); }
+
+  .hint-ring {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,0.2);
+    position: relative;
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(2px);
+    animation: pulse 2s infinite;
+  }
+  .hint-ring::before, .hint-ring::after {
+    content: ''; position: absolute; top: 50%; width: 10px; height: 10px;
+    border-top: 2px solid #fff; border-right: 2px solid #fff; opacity: 0.6;
+  }
+  .hint-ring::before { left: 12px; transform: translateY(-50%) rotate(-135deg); }
+  .hint-ring::after { right: 12px; transform: translateY(-50%) rotate(45deg); }
+  
+  .hint-text {
+    font-size: 14px; letter-spacing: 0.2em; color: rgba(255,255,255,0.6);
+    text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.05); opacity: 1; }
+  }
+
+  #loading {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #ff4b6a;
+    font-size: 14px;
+    letter-spacing: 2px;
+    display: block;
+    z-index: 20;
+    background: rgba(0,0,0,0.8);
+    padding: 12px 24px;
+    border-radius: 24px;
+    text-align: center;
+    max-width: 90%;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+<body>
+  <div id="phone">
+    <div id="stage"></div>
+    <div id="loading">模型加载中...</div>
+    <div class="hint" id="hint">
+      <div class="hint-ring"></div>
+      <div class="hint-text">滑动旋转观察</div>
+    </div>
+  </div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+/* ============================================================
+   🌹 模型路径：因为全在同一个 GitHub 仓库，直接用相对路径
+   ============================================================ */
+const MODEL_URL = './rose.glb';
+
+/* ============================================================
+   1. 基础环境
+   ============================================================ */
+const container = document.getElementById('stage');
+const hintEl = document.getElementById('hint');
+const loadingEl = document.getElementById('loading');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearAlpha(0);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2; 
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
+camera.position.set(0, 2, 8);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.rotateSpeed = 0.8;
+controls.enablePan = false;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.5;
+
+// 环境贴图，让模型更有光泽
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+/* ============================================================
+   2. 光影布置
+   ============================================================ */
+scene.add(new THREE.AmbientLight(0xffffff, 0.4)); 
+
+const keyLight = new THREE.DirectionalLight(0xfff2f2, 3.0); 
+keyLight.position.set(5, 8, 5);
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0x7788aa, 1.5);
+fillLight.position.set(-5, 3, 4);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xff3344, 2.5);
+rimLight.position.set(0, 5, -8);
+scene.add(rimLight);
+
+/* ============================================================
+   3. 加载模型
+   ============================================================ */
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+
+const gltfLoader = new GLTFLoader();
+gltfLoader.setDRACOLoader(dracoLoader);
+
+let currentModel = null;
+
+gltfLoader.load(
+  MODEL_URL,
+  (gltf) => {
+    currentModel = gltf.scene;
+
+    // 保底材质：深红丝绒
+    const fallbackMat = new THREE.MeshPhysicalMaterial({
+      color: 0xcc0022, roughness: 0.6, metalness: 0.1, 
+      clearcoat: 0.1, clearcoatRoughness: 0.5, sheen: 1.0, sheenColor: new THREE.Color(0xff2b4a),
+    });
+
+    currentModel.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        // 如果模型无材质或纯白，自动替换为红丝绒材质
+        if (!child.material || (child.material.type === 'MeshStandardMaterial' && child.material.color.getHex() === 0xffffff && !child.material.map)) {
+          child.material = fallbackMat;
+        }
+      }
+    });
+
+    scene.add(currentModel);
+
+    // ===== 自动居中与自适应缩放 =====
+    const box = new THREE.Box3().setFromObject(currentModel);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+
+    currentModel.position.sub(center);
+    currentModel.position.y += size.y * 0.05;
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = camera.fov * (Math.PI / 180);
+    let cameraDist = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.6; 
+    cameraDist = Math.max(cameraDist, 2.0);
+
+    camera.position.set(0, cameraDist * 0.2, cameraDist);
+    controls.target.set(0, 0, 0);
+    controls.minDistance = cameraDist * 0.4;
+    controls.maxDistance = cameraDist * 3.0;
+    controls.update();
+
+    loadingEl.style.display = 'none';
+  },
+  (xhr) => {
+    if (xhr.total > 0) {
+      const percent = Math.round((xhr.loaded / xhr.total) * 100);
+      loadingEl.innerText = `模型加载中... ${percent}%`;
+    }
+  },
+  (error) => {
+    console.error('加载失败:', error);
+    loadingEl.innerHTML = `❌ 找不到 rose.glb<br><span style="font-size:12px;color:#ccc;">请确保文件已上传到 GitHub 仓库，且名字为 rose.glb</span>`;
+  }
+);
+
+/* ============================================================
+   4. 交互提示
+   ============================================================ */
+let hintDismissed = false;
+let idleTimer = null;
+
+function dismissHint() {
+  if (hintDismissed) return;
+  hintDismissed = true;
+  hintEl.classList.add('hide');
+}
+
+controls.addEventListener('start', () => {
+  dismissHint();
+  controls.autoRotate = false;
+  clearTimeout(idleTimer);
+});
+
+controls.addEventListener('end', () => {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { controls.autoRotate = true; }, 3000);
+});
+
+function onResize() {
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+const ro = new ResizeObserver(onResize);
+ro.observe(container);
+requestAnimationFrame(onResize);
+setTimeout(dismissHint, 4000);
+
+/* ============================================================
+   5. 渲染循环
+   ============================================================ */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  
+  if (currentModel) {
+    const time = clock.getElapsedTime();
+    currentModel.position.y += Math.sin(time * 1.5) * 0.0005;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
